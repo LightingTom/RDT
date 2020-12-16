@@ -3,6 +3,11 @@ import threading
 import time
 
 
+def get_send_to(sendto,addr):
+    def result(data):
+        sendto(data,addr)
+    return result
+
 class RDTSocket(UnreliableSocket):
     """
     The functions with which you are to build your RDT.
@@ -22,6 +27,7 @@ class RDTSocket(UnreliableSocket):
         self._rate = rate
         self._send_to = None
         self._recv_from = None
+        self.target_addr = None
         self.buffer_size = 100000
         self.debug = debug
         #############################################################################
@@ -53,8 +59,8 @@ class RDTSocket(UnreliableSocket):
             self.sendto(reply.encode(),addr)
         data, addr = self.recvfrom(self.buffer_size)
         if decode(data).ack:
-            conn.set_recv_from(conn.recvfrom)
-            conn.set_send_to(conn.sendto)
+            conn.set_recv_from(self.recvfrom)
+            conn.set_send_to(get_send_to(conn.sendto,addr))
             return conn, addr
         #############################################################################
         # TODO: YOUR CODE HERE                                                      #
@@ -78,7 +84,9 @@ class RDTSocket(UnreliableSocket):
         if decode(data).syn and decode(data).ack:
             pkt2 = RDTPacket(False, False, True, 0, 0, 0, b'')
             self.sendto(pkt2.encode(), address)
-            print("connection succeed")
+            self.set_send_to(get_send_to(self.sendto,addr))
+            self.set_recv_from(self.recvfrom)
+            print("connection succeed with", address)
         #############################################################################
         #                             END OF YOUR CODE                              #
         #############################################################################
@@ -93,7 +101,8 @@ class RDTSocket(UnreliableSocket):
         In other words, if someone else sends data to you from another address,
         it MUST NOT affect the data returned by this function.
         """
-        data = None
+        data = self._recv_from(bufsize)
+        print(data)
         assert self._recv_from, "Connection not established yet. Use recvfrom instead."
         #############################################################################
         # TODO: YOUR CODE HERE                                                      #
@@ -109,11 +118,12 @@ class RDTSocket(UnreliableSocket):
         Send data to the socket. 
         The socket must be connected to a remote socket, i.e. self._send_to must not be none.
         """
+        pkt = RDTPacket(False,False,False,0,0,len(bytes),bytes)
+        self._send_to(pkt.encode())
         assert self._send_to, "Connection not established yet. Use sendto instead."
         #############################################################################
         # TODO: YOUR CODE HERE                                                      #
         #############################################################################
-        raise NotImplementedError()
         #############################################################################
         #                             END OF YOUR CODE                              #
         #############################################################################
