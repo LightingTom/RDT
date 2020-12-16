@@ -1,12 +1,30 @@
+from collections import deque
+
 from USocket import UnreliableSocket
+from socket import timeout as TimeoutException
 import threading
 import time
+
+
+WINDOW_SIZE = 4
+TIME_OUT = 1
+MAX_RETRY = 5
 
 
 def get_send_to(sendto,addr):
     def result(data):
         sendto(data,addr)
     return result
+
+
+def get_base(bool_arr):
+    cnt = 0
+    for i in bool_arr:
+        if not i:
+            break
+        cnt += 1
+    return cnt
+
 
 class RDTSocket(UnreliableSocket):
     """
@@ -84,7 +102,7 @@ class RDTSocket(UnreliableSocket):
         if decode(data).syn and decode(data).ack:
             pkt2 = RDTPacket(False, False, True, 0, 0, 0, b'')
             self.sendto(pkt2.encode(), address)
-            self.set_send_to(get_send_to(self.sendto,addr))
+            self.set_send_to(get_send_to(self.sendto, addr))
             self.set_recv_from(self.recvfrom)
             print("connection succeed with", address)
         #############################################################################
@@ -101,9 +119,15 @@ class RDTSocket(UnreliableSocket):
         In other words, if someone else sends data to you from another address,
         it MUST NOT affect the data returned by this function.
         """
+        self.settimeout(1)
+        result = b''
         data = self._recv_from(bufsize)
-        print(data)
-        assert self._recv_from, "Connection not established yet. Use recvfrom instead."
+        while not decode(data[0]).fin:
+            result += decode(data[0]).payload
+            ack_pkt = RDTPacket(False, False, False, 0, decode(data[0]).seq,0,b'')
+            self.sendto(ack_pkt.encode(),('127.0.0.1',8081))
+            data = self._recv_from(bufsize)
+        print(result)
         #############################################################################
         # TODO: YOUR CODE HERE                                                      #
         #############################################################################
@@ -111,16 +135,79 @@ class RDTSocket(UnreliableSocket):
         #############################################################################
         #                             END OF YOUR CODE                              #
         #############################################################################
-        return data
+        return result
 
     def send(self, bytes:bytes):
         """
         Send data to the socket. 
         The socket must be connected to a remote socket, i.e. self._send_to must not be none.
         """
-        pkt = RDTPacket(False,False,False,0,0,len(bytes),bytes)
-        self._send_to(pkt.encode())
-        assert self._send_to, "Connection not established yet. Use sendto instead."
+        self.settimeout(TIME_OUT)
+        pkt_list = []
+        # TODO: Change 5 to self.buffer_size
+        seq = 0
+        while len(bytes) > 5:
+            data = bytes[:5]
+            pkt = RDTPacket(False, False, False, seq, 0, 5, data)
+            pkt_list.append(pkt)
+            bytes = bytes[5:]
+            seq += 1
+        if len(bytes) != 0:
+            pkt_list.append(RDTPacket(False, False, False, seq, 0, len(bytes), bytes))
+        acked = [False for _ in range(len(pkt_list))]
+        # print(data_list)
+        added = -1
+        win = deque(maxlen=WINDOW_SIZE)
+        if len(pkt_list) > WINDOW_SIZE:
+            for i in range(WINDOW_SIZE):
+                win.append(pkt_list[i])
+                added = i
+        else:
+            for i in pkt_list:
+                win.append(i)
+
+        window_base = 0
+        for pkt in win:
+            self._send_to(pkt.encode())
+
+        retry = 0
+        while True:
+            try:
+                data_rcv = self._recv_from(1000)
+                p = decode(data_rcv[0])
+                acked[p.seq_ack] = True
+                retry = 0
+
+                window_base = get_base(acked)
+                while True and len(win) != 0:
+                    front = win.popleft().seq
+                    if front == window_base - 1:
+                        break
+
+                if len(win) != 0:
+                    add_num = WINDOW_SIZE - (win[-1].seq - window_base + 1)
+                for i in range(add_num):
+                    to_add = added + 1 + i
+                    if to_add < len(pkt_list):
+                        self._send_to(pkt_list[to_add].encode())
+                        win.append(pkt_list[to_add])
+                        added = to_add
+                    else:
+                        break
+
+                if len(win) == 0:
+                    break
+            except TimeoutException:
+                retry += 1
+                if retry >= MAX_RETRY:
+                    print("connection failed")
+                    break
+                self._send_to(pkt_list[window_base].encode())
+
+        fin_pkt = RDTPacket(False,True,False,0,0,0,b'')
+        self._send_to(fin_pkt.encode())
+
+
         #############################################################################
         # TODO: YOUR CODE HERE                                                      #
         #############################################################################
@@ -170,34 +257,6 @@ def get_sum(data):
     return result
 
 
-def decode(packet):
-    info = packet[0:1]
-    flag = bin(info[0]>>5)[2:]
-    syn, fin, ack = False, False, False
-    if len(flag) == 1:
-        flag = '00' + flag
-    if len(flag) == 2:
-        flag = '0' + flag
-    if flag[0] == '1':
-        syn = True
-    if flag[1] == '1':
-        fin = True
-    if flag[2] == '1':
-        ack = True
-    seq = int.from_bytes(packet[2:6], 'big')
-    seq_ack = int.from_bytes(packet[6:10], 'big')
-    length = int.from_bytes(packet[10:14], 'big')
-    check_sum = hex(packet[14])[2:] + hex(packet[15])[2:]
-    payload = packet[16:]
-    result = RDTPacket(syn,fin,ack,seq,seq_ack,length,payload,check=int(check_sum,16))
-    try:
-        r, chk = result.calculate()
-        assert chk == '0'
-        return result
-    except AssertionError as e:
-        raise ValueError from e
-
-
 class RDTPacket:
     """
     Form(in byte):
@@ -222,7 +281,10 @@ class RDTPacket:
         result, check_sum = self.calculate()
         print(check_sum)
         self.check = int(check_sum,16)
-        result += bytes.fromhex(check_sum)
+        hex_str = check_sum
+        if len(hex_str) == 3:
+            hex_str = '0'+hex_str
+        result += bytes.fromhex(hex_str)
         result += self.payload
         return result
 
@@ -255,6 +317,30 @@ class RDTPacket:
         return result, hex(~int(check_sum,16) & 0xFFFF)[2:]
 
 
-
-
-
+def decode(packet) -> RDTPacket:
+    info = packet[0:1]
+    flag = bin(info[0]>>5)[2:]
+    syn, fin, ack = False, False, False
+    if len(flag) == 1:
+        flag = '00' + flag
+    if len(flag) == 2:
+        flag = '0' + flag
+    if flag[0] == '1':
+        syn = True
+    if flag[1] == '1':
+        fin = True
+    if flag[2] == '1':
+        ack = True
+    seq = int.from_bytes(packet[2:6], 'big')
+    seq_ack = int.from_bytes(packet[6:10], 'big')
+    length = int.from_bytes(packet[10:14], 'big')
+    check_sum = hex(packet[14])[2:] + hex(packet[15])[2:]
+    payload = packet[16:]
+    result = RDTPacket(syn,fin,ack,seq,seq_ack,length,payload,check=int(check_sum,16))
+    try:
+        r, chk = result.calculate()
+        assert chk == '0'
+        return result
+    except AssertionError as e:
+        print("Corrupted packet")
+        raise ValueError from e

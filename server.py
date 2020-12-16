@@ -18,6 +18,7 @@
 # encoded = packet.encode()
 # c = rdt.decode(encoded)
 # print(c.payload)
+import time
 
 import rdt
 
@@ -25,6 +26,5 @@ s = rdt.RDTSocket()
 s.bind(('127.0.0.1', 8080))
 while True:
     conn, addr = s.accept()
-    print(conn.recv(10000))
-    conn.send(b'hello,too')
+    conn.recv(10000)
     print('waiting')
