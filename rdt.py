@@ -120,9 +120,20 @@ class RDTSocket(UnreliableSocket):
         it MUST NOT affect the data returned by this function.
         """
         self.settimeout(1)
+
         result = b''
         data = self._recv_from(bufsize)
+        cnt1 = 0
+        cnt2 = 0
         while not decode(data[0]).fin:
+            if decode(data[0]).seq == 1 and cnt1 == 0:
+                cnt1 += 1
+                time.sleep(1.5)
+                continue
+            if decode(data[0]).seq == 3 and cnt2 == 0:
+                cnt2 += 1
+                time.sleep(1.5)
+                continue
             result += decode(data[0]).payload
             ack_pkt = RDTPacket(False, False, False, 0, decode(data[0]).seq,0,b'')
             self.sendto(ack_pkt.encode(),('127.0.0.1',8081))
@@ -184,6 +195,7 @@ class RDTSocket(UnreliableSocket):
                     if front == window_base - 1:
                         break
 
+                add_num = 0
                 if len(win) != 0:
                     add_num = WINDOW_SIZE - (win[-1].seq - window_base + 1)
                 for i in range(add_num):
@@ -204,7 +216,6 @@ class RDTSocket(UnreliableSocket):
                     break
                 self._send_to(pkt_list[window_base].encode())
 
-        fin_pkt = RDTPacket(False,True,False,0,0,0,b'')
         self._send_to(fin_pkt.encode())
 
 
@@ -279,11 +290,17 @@ class RDTPacket:
 
     def encode(self):
         result, check_sum = self.calculate()
-        print(check_sum)
-        self.check = int(check_sum,16)
+        if self.check != 0:
+            check_sum = hex(self.check)[2:]
+        else:
+            self.check = int(check_sum,16)
         hex_str = check_sum
         if len(hex_str) == 3:
             hex_str = '0'+hex_str
+        elif len(hex_str) == 2:
+            hex_str = '00' + hex_str
+        elif len(hex_str) == 1:
+            hex_str = '000' + hex_str
         result += bytes.fromhex(hex_str)
         result += self.payload
         return result
