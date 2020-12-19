@@ -26,5 +26,6 @@ s = rdt.RDTSocket()
 s.bind(('127.0.0.1', 8080))
 while True:
     conn, addr = s.accept()
-    conn.recv(10000)
+    data = conn.recv(100000)
+    print(data.decode())
     print('waiting')
