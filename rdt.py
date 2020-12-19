@@ -10,6 +10,7 @@ WINDOW_SIZE = 4
 TIME_OUT = 2
 MAX_RETRY = 5
 RCV_BUFF_SIZE = 4
+MAX_SEND_SIZE = 5
 
 
 def get_send_to(sendto,addr):
@@ -47,12 +48,11 @@ class RDTSocket(UnreliableSocket):
         self._send_to = None
         self._recv_from = None
         self.target_addr = None
-        self.buffer_size = 100000
+        self.buffer_size = 25
         self.debug = debug
         self.timer_list = []
         self.send_win = deque(maxlen=WINDOW_SIZE)
         #############################################################################
-        # TODO: ADD YOUR NECESSARY ATTRIBUTES HERE
         #############################################################################
         
         #############################################################################
@@ -73,6 +73,7 @@ class RDTSocket(UnreliableSocket):
         """
         conn, addr = RDTSocket(self._rate), None
         data, addr = self.recvfrom(self.buffer_size)
+        # print("accept addr",addr)
         self.setblocking(True)
         pkt = decode(data)
         if pkt.syn:
@@ -83,8 +84,7 @@ class RDTSocket(UnreliableSocket):
             conn.set_recv_from(self.recvfrom)
             conn.set_send_to(get_send_to(conn.sendto,addr))
             return conn, addr
-        #############################################################################
-        # TODO: YOUR CODE HERE                                                      #
+        #############################################################################                                                    #
         #############################################################################
         #############################################################################
         #                             END OF YOUR CODE                              #
@@ -96,12 +96,12 @@ class RDTSocket(UnreliableSocket):
         Connect to a remote socket at address.
         Corresponds to the process of establishing a connection on the client side.
         """
-        #############################################################################
-        # TODO: YOUR CODE HERE                                                      #
+        #############################################################################                                                    #
         #############################################################################
         pkt = RDTPacket(True, False, False, 0, 0, 0, b'')
         self.sendto(pkt.encode(),address)
         data, addr = self.recvfrom(self.buffer_size)
+        # print("connect", addr)
         if decode(data).syn and decode(data).ack:
             pkt2 = RDTPacket(False, False, True, 0, 0, 0, b'')
             self.sendto(pkt2.encode(), address)
@@ -159,7 +159,8 @@ class RDTSocket(UnreliableSocket):
 
         need = 0
         ack = -1
-        cnt = 0
+        # cnt = 0
+        # cnt1 = 0
         while True:
             try:
                 data = self._recv_from(bufsize)
@@ -178,9 +179,12 @@ class RDTSocket(UnreliableSocket):
                 seq_ack = pkt_rcv.seq
                 ack = seq_ack
                 # You can simulate packet loss here
-                if cnt == 0 and ack == 6:
-                    cnt += 1
-                    continue
+                # if cnt == 0 and ack == 2:
+                #     cnt += 1
+                #     continue
+                # if cnt1 == 0 and ack == 6:
+                #     cnt1 += 1
+                #     continue
                 print("ack #", ack)
                 # print("buffer length:", len(buffer))
                 self._send_to(RDTPacket(False, False, False, 0, ack, 0, b'').encode())
@@ -215,8 +219,7 @@ class RDTSocket(UnreliableSocket):
             except ValueError:
                 pass
         print(result)
-        #############################################################################
-        # TODO: YOUR CODE HERE                                                      #
+        #############################################################################                                                     #
         #############################################################################
         
         #############################################################################
@@ -234,11 +237,11 @@ class RDTSocket(UnreliableSocket):
         # TODO: Change 5 to self.buffer_size
         # Split the data and get the whole packet list
         seq = 0
-        while len(bytes) > 5:
-            data = bytes[:5]
-            pkt = RDTPacket(False, False, False, seq, 0, 5, data)
+        while len(bytes) > self.buffer_size - 16:
+            data = bytes[:self.buffer_size - 16]
+            pkt = RDTPacket(False, False, False, seq, 0, self.buffer_size - 16, data)
             pkt_list.append(pkt)
-            bytes = bytes[5:]
+            bytes = bytes[self.buffer_size - 16:]
             seq += 1
         if len(bytes) != 0:
             pkt_list.append(RDTPacket(False, False, False, seq, 0, len(bytes), bytes))
@@ -351,8 +354,7 @@ class RDTSocket(UnreliableSocket):
             self._send_to(RDTPacket(False, False, True, 0, 0, 0, b'').encode())
 
 
-        #############################################################################
-        # TODO: YOUR CODE HERE                                                      #
+        #############################################################################                                               #
         #############################################################################
         #############################################################################
         #                             END OF YOUR CODE                              #
@@ -466,6 +468,7 @@ class RDTPacket:
 
 
 def decode(packet) -> RDTPacket:
+    # print(packet)
     info = packet[0:1]
     flag = bin(info[0]>>5)[2:]
     syn, fin, ack = False, False, False
@@ -482,7 +485,10 @@ def decode(packet) -> RDTPacket:
     seq = int.from_bytes(packet[2:6], 'big')
     seq_ack = int.from_bytes(packet[6:10], 'big')
     length = int.from_bytes(packet[10:14], 'big')
-    check_sum = hex(packet[14])[2:] + hex(packet[15])[2:]
+    second = hex(packet[15])[2:]
+    if len(second) == 1:
+        second = '0'+second
+    check_sum = hex(packet[14])[2:] + second
     payload = packet[16:]
     result = RDTPacket(syn,fin,ack,seq,seq_ack,length,payload,check=int(check_sum,16))
     try:
@@ -490,5 +496,7 @@ def decode(packet) -> RDTPacket:
         assert chk == '0'
         return result
     except AssertionError as e:
+        print("check_sum", check_sum)
+        print("calculated:", chk)
         print("Corrupted packet")
         raise ValueError from e
