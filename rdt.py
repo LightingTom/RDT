@@ -282,11 +282,8 @@ class RDTSocket(UnreliableSocket):
 
                 # Receive the packet
                 ack = pkt_rcv.seq
-                print("ack #", ack)
+
                 # print("buffer length:", len(buffer))
-                self._send_to(RDTPacket(False, False, False, 0, ack, 0, b'').encode())
-
-
                 if ack == need:
                     need += 1
                     # if len(buffer) != 0:
@@ -305,6 +302,11 @@ class RDTSocket(UnreliableSocket):
                     else:
                         inserted = False
                         for i in range(len(buffer)):
+                            if pkt_rcv.seq == buffer[i].seq:
+                                inserted = True
+                        for i in range(len(buffer)):
+                            if inserted:
+                                break
                             if pkt_rcv.seq < buffer[i].seq:
                                 buffer.insert(i, pkt_rcv)
                                 inserted = True
@@ -313,11 +315,13 @@ class RDTSocket(UnreliableSocket):
                             buffer.append(pkt_rcv)
                 else:
                     pass
+                print("ack #", ack)
+                self._send_to(RDTPacket(False, False, False, 0, ack, 0, b'').encode())
             except TimeoutException:
                 self._send_to(RDTPacket(False, False, False, 0, ack, 0, b'').encode())
             except ValueError:
                 pass
-        print('recv buffer length', len(buffer))
+        # print('recv buffer length', len(buffer))
         #############################################################################                                                     #
         #############################################################################
         

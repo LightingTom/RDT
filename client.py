@@ -2,12 +2,13 @@ import time
 
 import rdt
 
-with open('h_alice.txt', 'rb') as f:
+with open('alice.txt', 'rb') as f:
     DATA = f.read()
 
 begin_time = time.time()
 
 c = rdt.RDTSocket()
+print("length", len(DATA))
 c.bind(('127.0.0.1', 7050))
 c.connect(('127.0.0.1',7000))
 c.send(DATA)

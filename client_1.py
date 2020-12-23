@@ -2,7 +2,7 @@ import time
 
 import rdt
 
-with open('h_alice.txt', 'rb') as f:
+with open('alice.txt', 'rb') as f:
     DATA = f.read()
 
 begin_time = time.time()
