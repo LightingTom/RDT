@@ -30,8 +30,10 @@ if __name__ == '__main__':
     while True:
         try:
             conn, addr = socket.accept()
+            t = time.time()
             data = conn.recv(10000000)
-            print(data.decode())
+            print(time.time() - t)
+            print(len(data))
             print('waiting')
         except:
             pass

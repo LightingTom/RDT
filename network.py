@@ -5,8 +5,8 @@ from socketserver import ThreadingUDPServer
 
 lock = threading.Lock()
 
-loss_rate = 0.0
-corrupt_rate = 0.00000
+loss_rate = 0.1
+corrupt_rate = 0.000001
 
 def bytes_to_addr(bytes):
     return inet_ntoa(bytes[:4]), int.from_bytes(bytes[4:8], 'big')
