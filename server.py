@@ -22,10 +22,16 @@ import time
 
 import rdt
 
-s = rdt.RDTSocket()
-s.bind(('127.0.0.1', 8080))
-while True:
-    conn, addr = s.accept()
-    data = conn.recv(100000)
-    print(data.decode())
-    print('waiting')
+
+if __name__ == '__main__':
+    socket = rdt.RDTSocket()
+    socket.bind(('127.0.0.1', 7000))
+    socket.setblocking(False)
+    while True:
+        try:
+            conn, addr = socket.accept()
+            data = conn.recv(10000000)
+            print(data.decode())
+            print('waiting')
+        except:
+            pass

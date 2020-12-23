@@ -5,6 +5,9 @@ from socketserver import ThreadingUDPServer
 
 lock = threading.Lock()
 
+loss_rate = 0.0
+corrupt_rate = 0.00000
+
 def bytes_to_addr(bytes):
     return inet_ntoa(bytes[:4]), int.from_bytes(bytes[4:8], 'big')
     
@@ -12,6 +15,7 @@ def addr_to_bytes(addr):
     return inet_aton(addr[0]) + addr[1].to_bytes(4, 'big')
 
 def corrupt(data: bytes) -> bytes:
+    print("corrupt")
     raw = list(data)
     for _ in range(0, random.randint(0, 3)):
         pos = random.randint(0, len(raw) - 1)
@@ -21,7 +25,7 @@ def corrupt(data: bytes) -> bytes:
 class Server(ThreadingUDPServer):
     def __init__(self, addr, rate=None, delay=None, corrupt=None):
         super().__init__(addr, None)
-        self.rate = rate            
+        self.rate = 10240
         self.buffer = 0
         self.delay = delay
         self.corrupt = corrupt
@@ -45,8 +49,16 @@ class Server(ThreadingUDPServer):
         data, socket = request
 
         with lock:
-            if self.rate: time.sleep(len(data) / self.rate)
+            if self.rate:
+                time.sleep(len(data) / self.rate)
             self.buffer -= len(data)
+
+            if random.random() < loss_rate:
+                print("loss")
+                return
+            for i in range(len(data) - 1):
+                if random.random() < corrupt_rate:
+                    data = corrupt(data)
             """
             blockingly process each request
             you can add random loss/corrupt here

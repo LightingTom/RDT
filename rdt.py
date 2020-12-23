@@ -1,3 +1,5 @@
+import random
+import time
 from collections import deque
 
 from USocket import UnreliableSocket
@@ -5,13 +7,14 @@ from socket import timeout as TimeoutException
 from threading import Timer
 
 # size of sending window
-WINDOW_SIZE = 75
-# limit of time out
-TIME_OUT = 2
+WINDOW_SIZE = 50
 # max times of retrans
 MAX_RETRY = 5
 # size of receiving window
-RCV_BUFF_SIZE = 10
+RCV_BUFF_SIZE = 50
+# parameter
+a = 0.125
+b = 0.25
 
 
 def get_send_to(sendto,addr):
@@ -49,10 +52,19 @@ class RDTSocket(UnreliableSocket):
         self._send_to = None
         self._recv_from = None
         self.target_addr = None
-        self.buffer_size = 16 + 1024
+        self.buffer_size = 16 + 448
         self.debug = debug
         self.timer_list = []
+        self.rtt_list = []
         self.send_win = deque(maxlen=WINDOW_SIZE)
+        # self.send_win.
+        self.con_addr = None
+        self.EstRTT = -1
+        self.DevRTT = -1
+        self.TimeoutInterval = 3
+        self.loss_list = []
+        self.send_list = []
+        self.loss_rate = 0
         #############################################################################
         #############################################################################
         
@@ -72,19 +84,22 @@ class RDTSocket(UnreliableSocket):
 
         This function should be blocking. 
         """
-        conn, addr = RDTSocket(self._rate), None
-        data, addr = self.recvfrom(self.buffer_size)
-        # print("accept addr",addr)
-        self.setblocking(True)
-        pkt = decode(data)
-        if pkt.syn:
-            reply = RDTPacket(True, False, True, 0, 0, 0, b'')
-            self.sendto(reply.encode(),addr)
-        data, addr = self.recvfrom(self.buffer_size)
-        if decode(data).ack:
-            conn.set_recv_from(self.recvfrom)
-            conn.set_send_to(get_send_to(conn.sendto,addr))
-            return conn, addr
+        try:
+            conn, addr = RDTSocket(self._rate), None
+            data, addr = self.recvfrom(self.buffer_size)
+            # print("accept addr",addr)
+            self.setblocking(False)
+            pkt = decode(data)
+            if pkt.syn:
+                reply = RDTPacket(True, False, True, 0, 0, 0, b'')
+                self.sendto(reply.encode(),addr)
+            data, addr = self.recvfrom(self.buffer_size)
+            if decode(data).ack:
+                conn.set_recv_from(self.recvfrom)
+                conn.set_send_to(get_send_to(conn.sendto,addr))
+                return conn, addr
+        except BlockingIOError:
+            pass
         #############################################################################                                                    #
         #############################################################################
         #############################################################################
@@ -99,19 +114,42 @@ class RDTSocket(UnreliableSocket):
         """
         #############################################################################                                                    #
         #############################################################################
+        self.con_addr = address
         pkt = RDTPacket(True, False, False, 0, 0, 0, b'')
+
+        timer_1 = Timer(self.TimeoutInterval, self.handle_timeout_v1, args=(pkt,address))
+        timer_1.start()
         self.sendto(pkt.encode(),address)
         data, addr = self.recvfrom(self.buffer_size)
-        # print("connect", addr)
+        timer_1.cancel()
+
         if decode(data).syn and decode(data).ack:
             pkt2 = RDTPacket(False, False, True, 0, 0, 0, b'')
+
+            timer_2 = Timer(self.TimeoutInterval, self.handle_timeout_v1, args=(pkt2,address))
+            timer_2.start()
             self.sendto(pkt2.encode(), address)
             self.set_send_to(get_send_to(self.sendto, addr))
             self.set_recv_from(self.recvfrom)
+            timer_2.cancel()
+
             print("connection succeed with", address)
         #############################################################################
         #                             END OF YOUR CODE                              #
         #############################################################################
+
+
+    def cal_delay(self):
+        if self.loss_rate > 0.7:
+            return 1
+        elif self.loss_rate > 0.5:
+            return 0.5
+        elif self.loss_rate > 0.3:
+            return 0.3
+        elif self.loss_rate > 0.1:
+            return 0.1
+        else:
+            return 0
 
     def get_pos(self, seq_num, cur_win):
         for i in range(len(cur_win)):
@@ -120,11 +158,56 @@ class RDTSocket(UnreliableSocket):
         return -1
 
     def handle_timeout(self, pkt):
-        print("Time out")
+        print("Time out pkt")
         print("Resend pkt #", pkt.seq)
-        timer = Timer(TIME_OUT, self.handle_timeout, args=(pkt,))
+
+        self.loss_list.append(time.time())
+        try:
+            while True:
+                if time.time() - self.loss_list[0] > 10:
+                    self.loss_list.pop(0)
+                else:
+                    break
+            while True:
+                if time.time() - self.send_list[0] > 10:
+                    self.send_list.pop(0)
+                else:
+                    break
+        except:
+            pass
+
+        if len(self.loss_list) < len(self.send_list):
+            self.loss_rate = len(self.loss_list) / len(self.send_list)
+        print(len(self.loss_list), len(self.send_list), "loss_rate:", self.loss_rate)
+
+        time.sleep(self.cal_delay())
+
+        timer = Timer(self.TimeoutInterval, self.handle_timeout, args=(pkt,))
         # print("pos:",self.get_pos(pkt.seq, self.send_win))
-        self.timer_list[self.get_pos(pkt.seq, self.send_win)] = timer
+        try:
+            self.timer_list[self.get_pos(pkt.seq, self.send_win)] = timer
+            self.rtt_list[self.get_pos(pkt.seq, self.send_win)] = time.time()
+        except:
+            return
+        self.send_list.append(time.time())
+        self._send_to(pkt.encode())
+        timer.start()
+
+    def handle_timeout_v1(self, pkt, address):
+        print("Time out pkt")
+        print("Resend connect")
+
+        timer = Timer(self.TimeoutInterval, self.handle_timeout_v1, args=(pkt,address))
+        # print("pos:",self.get_pos(pkt.seq, self.send_win))
+        self.sendto(pkt.encode(), address)
+        timer.start()
+
+    def handle_timeout_v2(self, pkt):
+        print("Time out pkt")
+        print("Resend disconnect")
+
+        timer = Timer(self.TimeoutInterval, self.handle_timeout_v2, args=(pkt,))
+        # print("pos:",self.get_pos(pkt.seq, self.send_win))
         self._send_to(pkt.encode())
         timer.start()
 
@@ -139,103 +222,87 @@ class RDTSocket(UnreliableSocket):
         it MUST NOT affect the data returned by this function.
         """
         # Used to test send(), just send ack when receive packet
-        self.settimeout(1)
-        result = b''
-        cnt = 0
-        while True:
-            try:
-                data = self._recv_from(1000000)
-                p = decode(data[0])
-                ack = RDTPacket(False, False, False, 0, p.seq, 0, b'')
-                print("rev #", p.seq)
-                if cnt == 0 and p.seq == 2:
-                    cnt += 1
-                    print("skip")
-                    continue
-                if cnt == 1 and p.seq == 6:
-                    cnt += 1
-                    continue
-                if cnt == 2 and p.seq == 101:
-                    cnt += 1
-                    continue
-                self._send_to(ack.encode())
-            except TimeoutException:
-                print("Resend")
-
-        # receive buffer
-        # buffer = deque(maxlen=RCV_BUFF_SIZE)
-        # # receive result
+        # self.settimeout(1)
         # result = b''
-        #
-        # # the needed seq of the data
-        # need = 0
-        # # the ack of received data
-        # ack = -1
-        #
         # cnt = 0
-        # cnt1 = 0
-        #
         # while True:
         #     try:
-        #         # data = (packet, addr)
-        #         data = self._recv_from(bufsize)
-        #         pkt_rcv = decode(data[0])
-        #         # End with four-way handshake
-        #         if pkt_rcv.fin:
-        #             ack_pkt = RDTPacket(False, False, True, 0, 0, 0, b'')
-        #             self._send_to(ack_pkt.encode())
-        #             fin_pkt = RDTPacket(False, True, False, 0, 0, 0, b'')
-        #             self._send_to(fin_pkt.encode())
-        #             f_ack = self._recv_from(bufsize)
-        #             if decode(f_ack[0]).ack:
-        #                 break
-        #
-        #         # Receive the packet
-        #         ack = pkt_rcv.seq
-        #         # You can simulate packet loss here
-        #         if cnt == 0 and ack == 2:
+        #         data = self._recv_from(1000)
+        #         p = decode(data[0])
+        #         ack = RDTPacket(False, False, False, 0, p.seq, 0, b'')
+        #         print("rev #", p.seq)
+        #         if cnt == 0 and p.seq == 2:
         #             cnt += 1
+        #             print("skip")
         #             continue
-        #         if cnt1 == 0 and ack == 6:
-        #             cnt1 += 1
-        #             continue
-        #         if cnt1 == 1 and ack == 101:
-        #             cnt1+=1
-        #             continue
-        #         print("ack #", ack)
-        #         # print("buffer length:", len(buffer))
-        #         self._send_to(RDTPacket(False, False, False, 0, ack, 0, b'').encode())
-        #         if ack == need:
-        #             need += 1
-        #             # if len(buffer) != 0:
-        #             #     print("buffer[0]:", buffer[0].seq)
-        #             # print("need:", need)
-        #             result += pkt_rcv.payload
-        #             # clean the buffer
-        #             while len(buffer) != 0 and buffer[0].seq == need:
-        #                 p = buffer.popleft()
-        #                 result += p.payload
-        #                 need += 1
-        #         elif ack > need:
-        #             # If not full, add to the buffer
-        #             if len(buffer) == RCV_BUFF_SIZE:
-        #                 continue
-        #             else:
-        #                 inserted = False
-        #                 for i in range(len(buffer)):
-        #                     if pkt_rcv.seq < buffer[i].seq:
-        #                         buffer.insert(i, pkt_rcv)
-        #                         inserted = True
-        #                         break
-        #                 if not inserted:
-        #                     buffer.append(pkt_rcv)
-        #         else:
-        #             pass
+        #         self._send_to(ack.encode())
         #     except TimeoutException:
-        #         self._send_to(RDTPacket(False, False, False, 0, ack, 0, b'').encode())
-        #     except ValueError:
-        #         pass
-        # print(result)
+        #         print("Resend")
+
+        # receive buffer
+        buffer = deque(maxlen=RCV_BUFF_SIZE)
+        # receive result
+        result = b''
+
+        # the needed seq of the data
+        need = 0
+        # the ack of received data
+        ack = -1
+
+
+        while True:
+            try:
+                # data = (packet, addr)
+                data = self._recv_from(bufsize)
+                pkt_rcv = decode(data[0])
+                # End with four-way handshake
+                if pkt_rcv.fin:
+                    ack_pkt = RDTPacket(False, False, True, 0, 0, 0, b'')
+                    self._send_to(ack_pkt.encode())
+                    fin_pkt = RDTPacket(False, True, False, 0, 0, 0, b'')
+                    self._send_to(fin_pkt.encode())
+                    f_ack = self._recv_from(bufsize)
+                    if decode(f_ack[0]).ack:
+                        break
+
+                # Receive the packet
+                ack = pkt_rcv.seq
+                print("ack #", ack)
+                # print("buffer length:", len(buffer))
+                self._send_to(RDTPacket(False, False, False, 0, ack, 0, b'').encode())
+
+
+                if ack == need:
+                    need += 1
+                    # if len(buffer) != 0:
+                    #     print("buffer[0]:", buffer[0].seq)
+                    # print("need:", need)
+                    result += pkt_rcv.payload
+                    # clean the buffer
+                    while len(buffer) != 0 and buffer[0].seq == need:
+                        p = buffer.popleft()
+                        result += p.payload
+                        need += 1
+                elif ack > need:
+                    # If not full, add to the buffer
+                    if len(buffer) == RCV_BUFF_SIZE:
+                        continue
+                    else:
+                        inserted = False
+                        for i in range(len(buffer)):
+                            if pkt_rcv.seq < buffer[i].seq:
+                                buffer.insert(i, pkt_rcv)
+                                inserted = True
+                                break
+                        if not inserted:
+                            buffer.append(pkt_rcv)
+                else:
+                    pass
+            except TimeoutException:
+                self._send_to(RDTPacket(False, False, False, 0, ack, 0, b'').encode())
+            except ValueError:
+                pass
+        print(result)
         #############################################################################                                                     #
         #############################################################################
         
@@ -282,13 +349,17 @@ class RDTSocket(UnreliableSocket):
         for pkt in self.send_win:
             print("Send pkt #", pkt.seq)
             sent[pkt.seq] = True
-            timer = Timer(TIME_OUT, self.handle_timeout, args=(pkt,))
+            timer = Timer(self.TimeoutInterval, self.handle_timeout, args=(pkt,))
             self.timer_list.append(timer)
+            self.rtt_list.append(time.time())
             self._send_to(pkt.encode())
+            self.send_list.append(time.time())
             timer.start()
         # Wait for acks
         retry = 0
         cnt1 = 0
+
+
         while True:
             try:
                 # print("loop:", cnt1)
@@ -297,10 +368,28 @@ class RDTSocket(UnreliableSocket):
                 cnt1+=1
                 data_rcv = self._recv_from(1000)
                 p = decode(data_rcv[0])
+
+
+
                 acked[p.seq_ack] = True
                 win_pos = p.seq_ack - window_base
-                print("Recv ack #", p.seq_ack)
-                self.timer_list[win_pos].cancel()
+                # print("win_pos: ", win_pos)
+                if win_pos >= 0:
+                    self.timer_list[win_pos].cancel()
+                    if self.EstRTT != -1:
+                        self.EstRTT = (1 - a) * self.EstRTT + a * (time.time()-self.rtt_list[win_pos])
+                    else:
+                        self.EstRTT = time.time()-self.rtt_list[win_pos]
+                    if self.DevRTT != -1:
+                        self.DevRTT = (1 - b) * self.DevRTT + b * abs(self.EstRTT - (time.time()-self.rtt_list[win_pos]))
+                    else:
+                        self.DevRTT = abs(self.EstRTT - (time.time()-self.rtt_list[win_pos]))
+                    self.TimeoutInterval = 1.5 * self.EstRTT + 4 * self.DevRTT
+                    self.TimeoutInterval += self.cal_delay()
+                    # print("est_rtt: ", self.EstRTT)
+                    # print("dev_rtt", self.DevRTT)
+                    # print("self.Timeout:",self.TimeoutInterval)
+
 
                 all_sent = True
                 for i in sent:
@@ -325,18 +414,23 @@ class RDTSocket(UnreliableSocket):
                     # print("window_base", window_base)
                     self.send_win.popleft()
                     self.timer_list.pop(0)
+                    self.rtt_list.pop(0)
 
                 if len(self.send_win) == real_win_size:
                     continue
                 add_num = 0
                 if len(self.send_win) != 0:
                     add_num = WINDOW_SIZE - (self.send_win[-1].seq - window_base + 1)
+                tmp_add = added + 1
                 for i in range(add_num):
-                    to_add = added + 1 + i
+                    to_add = tmp_add + i      # to_add = added + 1 + i
                     if to_add < len(pkt_list):
-                        timer = Timer(TIME_OUT, self.handle_timeout, args=(pkt_list[to_add],))
+                        timer = Timer(self.TimeoutInterval, self.handle_timeout, args=(pkt_list[to_add],))
                         self.timer_list.append(timer)
+                        self.rtt_list.append(time.time())
                         self._send_to(pkt_list[to_add].encode())
+                        time.sleep(self.cal_delay())
+                        self.send_list.append(time.time())
                         timer.start()
                         print("Send pkt #", pkt_list[to_add].seq)
                         self.send_win.append(pkt_list[to_add])
@@ -349,10 +443,13 @@ class RDTSocket(UnreliableSocket):
                         break
                     else:
                         p_to_send = pkt_list[added + 1]
-                        timer = Timer(TIME_OUT, self.handle_timeout, args=(p_to_send,))
+                        timer = Timer(self.TimeoutInterval, self.handle_timeout, args=(p_to_send,))
                         self.timer_list.append(timer)
+                        self.rtt_list.append(time.time())
                         self.send_win.append(p_to_send)
                         self._send_to(p_to_send.encode())
+                        time.sleep(self.cal_delay())
+                        self.send_list.append(time.time())
                         timer.start()
                         added = added + 1
 
@@ -370,28 +467,10 @@ class RDTSocket(UnreliableSocket):
                 print("loop", cnt1)
                 print("window base", window_base)
 
-        # End with four-way handshake
-        fin_pkt = RDTPacket(False,True,False,0,0,0,b'')
-        self._send_to(fin_pkt.encode())
-        retry = 0
-        while True:
-            try:
-                data_rcv = self._recv_from(1000)
-                if decode(data_rcv[0]).ack:
-                    break
-            except TimeoutException:
-                retry += 1
-                if retry >= MAX_RETRY:
-                    print("connection break")
-                self._send_to(fin_pkt.encode())
 
-        fin_rcv = self._recv_from(1000)
-        if decode(fin_rcv[0]).fin:
-            self._send_to(RDTPacket(False, False, True, 0, 0, 0, b'').encode())
+        # self.close()
+        # self.connect(self.con_addr)
 
-
-        #############################################################################                                               #
-        #############################################################################
         #############################################################################
         #                             END OF YOUR CODE                              #
         #############################################################################
@@ -402,9 +481,31 @@ class RDTSocket(UnreliableSocket):
         after a socket is closed, neither futher sends nor receives are allowed.
         """
         #############################################################################
-        # TODO: YOUR CODE HERE                                                      #
-        #############################################################################
-        
+        # Kill the timer_list
+        for t in self.timer_list:
+            t.cancel()
+        # End with four-way handshake
+        fin_pkt = RDTPacket(False, True, False, 0, 0, 0, b'')
+        timer = Timer(self.TimeoutInterval, self.handle_timeout_v2, args=(fin_pkt,))
+        self._send_to(fin_pkt.encode())
+        timer.start()
+        retry = 0
+        while True:
+            try:
+                data_rcv = self._recv_from(1000)
+                if decode(data_rcv[0]).ack:
+                    timer.cancel()
+                    break
+            except TimeoutException:
+                retry += 1
+                if retry >= MAX_RETRY:
+                    print("connection break")
+                self._send_to(fin_pkt.encode())
+
+        fin_rcv = self._recv_from(1000)
+        if decode(fin_rcv[0]).fin:
+            self._send_to(RDTPacket(False, False, True, 0, 0, 0, b'').encode())
+        print("connection closed")
         #############################################################################
         #                             END OF YOUR CODE                              #
         #############################################################################
