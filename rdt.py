@@ -483,7 +483,7 @@ class RDTSocket(UnreliableSocket):
                 print("Index Error")
                 print("loop", cnt1)
                 print("window base", window_base)
-
+        self.send_fin()
         # self.close()
         # self.connect(self.con_addr)
 
@@ -491,13 +491,7 @@ class RDTSocket(UnreliableSocket):
         #                             END OF YOUR CODE                              #
         #############################################################################
 
-    def close(self):
-        """
-        Finish the connection and release resources. For simplicity, assume that
-        after a socket is closed, neither futher sends nor receives are allowed.
-        """
-        #############################################################################
-        # Kill the timer_list
+    def send_fin(self):
         for t in self.timer_list:
             t.cancel()
         # End with four-way handshake
@@ -521,7 +515,14 @@ class RDTSocket(UnreliableSocket):
         fin_rcv = self._recv_from(1000)
         if decode(fin_rcv[0]).fin:
             self._send_to(RDTPacket(False, False, True, 0, 0, 0, b'').encode())
-        print("connection closed")
+        print("send end")
+
+    def close(self):
+        """
+        Finish the connection and release resources. For simplicity, assume that
+        after a socket is closed, neither futher sends nor receives are allowed.
+        """
+        #############################################################################
         #############################################################################
         #                             END OF YOUR CODE                              #
         #############################################################################
