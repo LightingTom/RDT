@@ -38,13 +38,11 @@ class RDTSocket(UnreliableSocket):
     -   recvfrom(bufsize)->bytes, addr
     -   sendto(bytes, address)
     -   bind(address)
-
     You can set the mode of the socket.
     -   settimeout(timeout)
     -   setblocking(flag)
-    By default, a socket is created in the blocking mode. 
+    By default, a socket is created in the blocking mode.
     https://docs.python.org/3/library/socket.html#socket-timeouts
-
     """
     def __init__(self, rate=None, debug=True):
         super().__init__(rate=rate)
@@ -70,7 +68,7 @@ class RDTSocket(UnreliableSocket):
         self.fin_timer = None
         #############################################################################
         #############################################################################
-        
+
         #############################################################################
         #                             END OF YOUR CODE                              #
         #############################################################################
@@ -80,12 +78,11 @@ class RDTSocket(UnreliableSocket):
 
     def accept(self):
         """
-        Accept a connection. The socket must be bound to an address and listening for 
-        connections. The return value is a pair (conn, address) where conn is a new 
-        socket object usable to send and receive data on the connection, and address 
+        Accept a connection. The socket must be bound to an address and listening for
+        connections. The return value is a pair (conn, address) where conn is a new
+        socket object usable to send and receive data on the connection, and address
         is the address bound to the socket on the other end of the connection.
-
-        This function should be blocking. 
+        This function should be blocking.
         """
         try:
             conn, addr = RDTSocket(self._rate), None
@@ -228,10 +225,10 @@ class RDTSocket(UnreliableSocket):
 
     def recv(self, bufsize:int)->bytes:
         """
-        Receive data from the socket. 
-        The return value is a bytes object representing the data received. 
-        The maximum amount of data to be received at once is specified by bufsize. 
-        
+        Receive data from the socket.
+        The return value is a bytes object representing the data received.
+        The maximum amount of data to be received at once is specified by bufsize.
+
         Note that ONLY data send by the peer should be accepted.
         In other words, if someone else sends data to you from another address,
         it MUST NOT affect the data returned by this function.
@@ -324,7 +321,7 @@ class RDTSocket(UnreliableSocket):
         # print('recv buffer length', len(buffer))
         #############################################################################                                                     #
         #############################################################################
-        
+
         #############################################################################
         #                             END OF YOUR CODE                              #
         #############################################################################
@@ -332,7 +329,7 @@ class RDTSocket(UnreliableSocket):
 
     def send(self, bytes:bytes):
         """
-        Send data to the socket. 
+        Send data to the socket.
         The socket must be connected to a remote socket, i.e. self._send_to must not be none.
         """
         # TODO: Add max retry
@@ -483,7 +480,31 @@ class RDTSocket(UnreliableSocket):
                 print("Index Error")
                 print("loop", cnt1)
                 print("window base", window_base)
-        self.send_fin()
+                # Kill the timer_list
+            for t in self.timer_list:
+                t.cancel()
+            # End with four-way handshake
+            fin_pkt = RDTPacket(False, True, False, 0, 0, 0, b'')
+            self.fin_timer = Timer(self.TimeoutInterval, self.handle_timeout_v2, args=(fin_pkt,))
+            self._send_to(fin_pkt.encode())
+            self.fin_timer.start()
+            retry = 0
+            while True:
+                try:
+                    data_rcv = self._recv_from(1000)
+                    if decode(data_rcv[0]).ack:
+                        self.fin_timer.cancel()
+                        break
+                except TimeoutException:
+                    retry += 1
+                    if retry >= MAX_RETRY:
+                        print("connection break")
+                    self._send_to(fin_pkt.encode())
+
+            fin_rcv = self._recv_from(1000)
+            if decode(fin_rcv[0]).fin:
+                self._send_to(RDTPacket(False, False, True, 0, 0, 0, b'').encode())
+        # print("connection closed")
         # self.close()
         # self.connect(self.con_addr)
 
@@ -491,52 +512,50 @@ class RDTSocket(UnreliableSocket):
         #                             END OF YOUR CODE                              #
         #############################################################################
 
-    def send_fin(self):
-        for t in self.timer_list:
-            t.cancel()
-        # End with four-way handshake
-        fin_pkt = RDTPacket(False, True, False, 0, 0, 0, b'')
-        self.fin_timer = Timer(self.TimeoutInterval, self.handle_timeout_v2, args=(fin_pkt,))
-        self._send_to(fin_pkt.encode())
-        self.fin_timer.start()
-        retry = 0
-        while True:
-            try:
-                data_rcv = self._recv_from(1000)
-                if decode(data_rcv[0]).ack:
-                    self.fin_timer.cancel()
-                    break
-            except TimeoutException:
-                retry += 1
-                if retry >= MAX_RETRY:
-                    print("connection break")
-                self._send_to(fin_pkt.encode())
-
-        fin_rcv = self._recv_from(1000)
-        if decode(fin_rcv[0]).fin:
-            self._send_to(RDTPacket(False, False, True, 0, 0, 0, b'').encode())
-        print("send end")
-
     def close(self):
         """
         Finish the connection and release resources. For simplicity, assume that
         after a socket is closed, neither futher sends nor receives are allowed.
         """
         #############################################################################
+        # Kill the timer_list
+        # for t in self.timer_list:
+        #     t.cancel()
+        # # End with four-way handshake
+        # fin_pkt = RDTPacket(False, True, False, 0, 0, 0, b'')
+        # self.fin_timer = Timer(self.TimeoutInterval, self.handle_timeout_v2, args=(fin_pkt,))
+        # self._send_to(fin_pkt.encode())
+        # self.fin_timer.start()
+        # retry = 0
+        # while True:
+        #     try:
+        #         data_rcv = self._recv_from(1000)
+        #         if decode(data_rcv[0]).ack:
+        #             self.fin_timer.cancel()
+        #             break
+        #     except TimeoutException:
+        #         retry += 1
+        #         if retry >= MAX_RETRY:
+        #             print("connection break")
+        #         self._send_to(fin_pkt.encode())
+        #
+        # fin_rcv = self._recv_from(1000)
+        # if decode(fin_rcv[0]).fin:
+        #     self._send_to(RDTPacket(False, False, True, 0, 0, 0, b'').encode())
+        # print("connection closed")
         #############################################################################
         #                             END OF YOUR CODE                              #
         #############################################################################
         super().close()
-        
+
     def set_send_to(self, send_to):
         self._send_to = send_to
-    
+
     def set_recv_from(self, recv_from):
         self._recv_from = recv_from
 
 """
 You can define additional functions and classes to do thing such as packing/unpacking packets, or threading.
-
 """
 def get_separate(num):
     left = num >> 16
