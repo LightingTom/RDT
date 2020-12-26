@@ -6,6 +6,7 @@ from difflib import Differ
 if __name__=='__main__':
     client = RDTSocket()
     # client = socket(AF_INET, SOCK_STREAM) # check what python socket does
+    client.bind(('127.0.0.1', 8999))
     client.connect(('127.0.0.1', 9999))
 
     echo = b''
@@ -13,7 +14,7 @@ if __name__=='__main__':
     slice_size = 2048
     blocking_send = False
 
-    with open('../../Desktop/single connection test/alice.txt', 'r') as f:
+    with open('alice.txt', 'r') as f:
         data = f.read()
         encoded = data.encode()
         assert len(data)==len(encoded)
